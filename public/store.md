@@ -16,4 +16,4 @@ A simple chat extension for [Owlbear Rodeo](https://www.owlbear.rodeo/).
 
 Player colors. Dice rolls. Notifications. All the basics!
 
-[Screenshot of a chat window showing player messages, dice rolls, and help output from /help.](https://hoot-chat.pages.dev/example.png)
+![Screenshot of a chat window showing player messages, dice rolls, and help output from /help.](https://hoot-chat.pages.dev/example.png)
