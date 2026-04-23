@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import OBR from "@owlbear-rodeo/sdk";
-import { ChatMessage, RollDie } from "./types";
+import { ChatMessage, DualityData, RollDie } from "./types";
+import { getAliases, setAlias, removeAlias, removeAllAliases, aliasErrorMessage } from "./aliases/store";
+import { expandAlias } from "./aliases/dispatch";
+import { parseDualityRoll, parseSingleDualityDie } from "./roll/parseDualityRoll";
+import { isDicePlusAvailable, getDicePlusEnabled, setDicePlusEnabled, generateRollId, sendDicePlusRoll, registerDicePlusListeners } from "./dicePlus/client";
+import { buildDualityNotation } from "./dicePlus/convert";
 
 const DICE_PREFIX = "rodeo.owlbear.dice/";
 const CHAT_STATUS_CHANNEL = "com.hootchat/chat-status";
@@ -147,7 +152,122 @@ function isCrit(dice: RollDie[]): boolean {
   return d10s.length >= 2 && d10s[0] === 10 && d10s[1] >= 9;
 }
 
-function RollDisplay({ msg }: { msg: { dice: RollDie[]; bonus: number; netEdges?: number; hasSkill?: boolean } }) {
+function dualityLabel(dd: DualityData, bonus: number): string {
+  const parts: string[] = [];
+  if (bonus !== 0) parts.push(`${bonus > 0 ? "+" : ""}${bonus}`);
+  if (dd.advDie !== undefined) parts.push("with advantage");
+  if (dd.disDie !== undefined) parts.push("with disadvantage");
+  if (dd.expDice && dd.expDice.length > 0) {
+    parts.push(`${dd.expDice.length} Experience`);
+  }
+  const suffix = parts.length > 0 ? ` ${parts.join(", ")}` : "";
+  return dd.label ? `${dd.label}${suffix}` : `duality${suffix}`;
+}
+
+const HOPE_COLOR = "#fbbf24";
+const FEAR_COLOR = "#dc2626";
+const CRIT_COLOR = "#a855f7";
+
+function DualityDisplay({ msg }: { msg: { bonus: number; dualityData: DualityData } }) {
+  const dd = msg.dualityData;
+
+  // Single-die mode (/hope or /fear)
+  const isSingleHope = dd.hopeDie > 0 && dd.fearDie === 0;
+  const isSingleFear = dd.fearDie > 0 && dd.hopeDie === 0;
+  if (isSingleHope || isSingleFear) {
+    const dieName = isSingleHope ? "Hope" : "Fear";
+    const dieColor = isSingleHope ? HOPE_COLOR : FEAR_COLOR;
+    const value = isSingleHope ? dd.hopeDie : dd.fearDie;
+    const total = value + msg.bonus;
+    return (
+      <span>
+        <span style={{ color: "#888", fontStyle: "italic" }}>
+          rolled {dieName.toLowerCase()}{dd.label ? ` (${dd.label})` : ""}:{" "}
+        </span>
+        <span style={{ color: dieColor, fontWeight: 700 }}>{value}</span>
+        {msg.bonus !== 0 && (
+          <span style={{ color: "#888" }}> ({msg.bonus > 0 ? "+ " : "- "}{Math.abs(msg.bonus)})</span>
+        )}
+        <span style={{ color: "#555" }}> = </span>
+        <span style={{ color: "#a78bfa", fontWeight: 700 }}>{total}</span>
+      </span>
+    );
+  }
+
+  // Full duality roll
+  const total = dd.hopeDie + dd.fearDie + msg.bonus
+    + (dd.advDie ?? 0)
+    - (dd.disDie ?? 0)
+    + (dd.expDice ? dd.expDice.reduce((s, v) => s + v, 0) : 0);
+
+  const outcomeColors: Record<string, string> = {
+    hope: HOPE_COLOR,
+    fear: FEAR_COLOR,
+    crit: CRIT_COLOR,
+  };
+  const outcomeLabels: Record<string, string> = {
+    hope: "Hope",
+    fear: "Fear",
+    crit: "CRITICAL",
+  };
+
+  return (
+    <span>
+      <span style={{ color: "#888", fontStyle: "italic" }}>
+        rolled {dualityLabel(dd, msg.bonus)}:{" "}
+      </span>
+      <span style={{ color: HOPE_COLOR, fontWeight: 700 }}>{dd.hopeDie}</span>
+      <span style={{ color: "#555" }}> + </span>
+      <span style={{ color: FEAR_COLOR, fontWeight: 700 }}>{dd.fearDie}</span>
+      {dd.advDie !== undefined && (
+        <>
+          <span style={{ color: "#555" }}> + </span>
+          <span style={{ fontWeight: 700 }}>{dd.advDie}</span>
+          <span style={{ color: "#888", fontSize: "11px" }}> Adv</span>
+        </>
+      )}
+      {dd.disDie !== undefined && (
+        <>
+          <span style={{ color: "#555" }}> − </span>
+          <span style={{ fontWeight: 700 }}>{dd.disDie}</span>
+          <span style={{ color: "#888", fontSize: "11px" }}> Dis</span>
+        </>
+      )}
+      {dd.expDice && dd.expDice.map((v, i) => (
+        <span key={i}>
+          <span style={{ color: "#555" }}> + </span>
+          <span style={{ fontWeight: 700 }}>{v}</span>
+          <span style={{ color: "#888", fontSize: "11px" }}> Exp</span>
+        </span>
+      ))}
+      {msg.bonus !== 0 && (
+        <span style={{ color: "#888" }}> ({msg.bonus > 0 ? "+ " : "- "}{Math.abs(msg.bonus)})</span>
+      )}
+      <span style={{ color: "#555" }}> = </span>
+      <span style={{ color: "#a78bfa", fontWeight: 700 }}>{total}</span>
+      <span style={{ color: "#555" }}> | </span>
+      <span style={{
+        background: outcomeColors[dd.outcome],
+        color: "#1a1a2e",
+        fontWeight: 700,
+        borderRadius: "3px",
+        padding: "0 4px",
+        whiteSpace: "nowrap",
+      }}>{outcomeLabels[dd.outcome]}</span>
+      {dd.outcome === "crit" && (
+        <div style={{ color: "#a855f7", fontSize: "11px", fontStyle: "italic", marginTop: "2px" }}>
+          Clear a Stress, gain a Hope
+        </div>
+      )}
+    </span>
+  );
+}
+
+function RollDisplay({ msg }: { msg: { dice: RollDie[]; bonus: number; netEdges?: number; hasSkill?: boolean; dualityData?: DualityData } }) {
+  if (msg.dualityData) {
+    return <DualityDisplay msg={{ bonus: msg.bonus, dualityData: msg.dualityData }} />;
+  }
+
   const isPowerRoll = msg.netEdges !== undefined;
   const adj = edgeAdj(msg.netEdges ?? 0);
   const skillBonus = isPowerRoll && msg.hasSkill ? 2 : 0;
@@ -201,6 +321,7 @@ export default function App() {
   const [allMessages, setAllMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [helpEntries, setHelpEntries] = useState<{ anchorId: string; key: number }[]>([]);
+  const [aliasEntries, setAliasEntries] = useState<{ anchorId: string; key: number; aliases: Record<string, string> }[]>([]);
 
   const playerIdRef = useRef("");
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -208,6 +329,8 @@ export default function App() {
   const allMessagesRef = useRef<ChatMessage[]>([]);
   const seenRef = useRef(new Set<string>());
   const isHostRef = useRef(false);
+  const dicePlusAvailableRef = useRef(false);
+  const useDicePlusRef = useRef(false);
 
   function writeHistory(messages: ChatMessage[]) {
     if (!isHostRef.current) return;
@@ -372,6 +495,13 @@ export default function App() {
         })
       );
 
+      // Dice+ integration: check availability and load preference.
+      // Register listeners unconditionally — they're no-ops when no
+      // pending rolls exist, and must be ready if Dice+ is enabled later.
+      unsubs.push(registerDicePlusListeners());
+      dicePlusAvailableRef.current = await isDicePlusAvailable();
+      useDicePlusRef.current = await getDicePlusEnabled();
+
       setReady(true);
     });
 
@@ -392,36 +522,216 @@ export default function App() {
     if (helpEntries.length > 0) bottomRef.current?.scrollIntoView({ behavior: "instant" });
   }, [helpEntries.length]);
 
+  useEffect(() => {
+    if (aliasEntries.length > 0) bottomRef.current?.scrollIntoView({ behavior: "instant" });
+  }, [aliasEntries.length]);
+
   async function sendMessage() {
     const text = input.trim();
     if (!text) return;
+    setInput("");
+    await dispatchCommand(text);
+  }
 
+  async function dispatchCommand(text: string, fromAlias = false) {
     if (text === "/help" || text === "/h") {
       setHelpEntries((prev) => [...prev, { anchorId: allMessagesRef.current[allMessagesRef.current.length - 1]?.id ?? "", key: Date.now() }]);
-      setInput("");
       return;
     }
 
-    const normalized = text.replace(/^\/r\b/, "/roll").replace(/^\/p\b/, "/power");
+    // --- Alias management commands ---
+    if (text.startsWith("/alias ") && !text.startsWith("/aliases")) {
+      const rest = text.slice(7).trim();
+      const spaceIdx = rest.indexOf(" ");
+      if (spaceIdx === -1) {
+        addSystemMessage("Usage: /alias <name> <command>");
+        return;
+      }
+      const name = rest.slice(0, spaceIdx);
+      const value = rest.slice(spaceIdx + 1).trim();
+      const err = await setAlias(name, value);
+      if (err) {
+        addSystemMessage(aliasErrorMessage(err));
+      } else {
+        addSystemMessage(`Alias saved: /${name} \u2192 ${value}`);
+      }
+      return;
+    }
+
+    if (text === "/aliases") {
+      const aliases = await getAliases();
+      setAliasEntries((prev) => [...prev, {
+        anchorId: allMessagesRef.current[allMessagesRef.current.length - 1]?.id ?? "",
+        key: Date.now(),
+        aliases,
+      }]);
+      return;
+    }
+
+    if (text.startsWith("/unalias ")) {
+      const rest = text.slice(9).trim();
+      if (rest === "* confirm") {
+        await removeAllAliases();
+        addSystemMessage("All aliases removed.");
+        return;
+      }
+      if (rest === "*") {
+        addSystemMessage("To remove all aliases, use: /unalias * confirm");
+        return;
+      }
+      const err = await removeAlias(rest);
+      if (err) {
+        addSystemMessage(aliasErrorMessage(err));
+      } else {
+        addSystemMessage(`Alias removed: ${rest}`);
+      }
+      return;
+    }
+
+    // --- Dice+ toggle command ---
+    if (text.toLowerCase().startsWith("/diceplus")) {
+      const arg = text.slice(9).trim().toLowerCase();
+      if (arg === "on") {
+        await setDicePlusEnabled(true);
+        useDicePlusRef.current = true;
+        if (!dicePlusAvailableRef.current) {
+          dicePlusAvailableRef.current = await isDicePlusAvailable();
+        }
+        addSystemMessage(dicePlusAvailableRef.current
+          ? "Dice+ enabled. Rolls will use 3D dice."
+          : "Dice+ enabled, but the extension was not detected. Rolls will use the internal roller until Dice+ is available.");
+        return;
+      }
+      if (arg === "off") {
+        await setDicePlusEnabled(false);
+        useDicePlusRef.current = false;
+        addSystemMessage("Dice+ disabled. Rolls will use the internal roller.");
+        return;
+      }
+      if (arg === "status") {
+        const enabled = useDicePlusRef.current;
+        const available = dicePlusAvailableRef.current;
+        addSystemMessage(`Dice+: ${enabled ? "enabled" : "disabled"}, ${available ? "available" : "not detected"}`);
+        return;
+      }
+      addSystemMessage("Usage: /dicePlus on | off | status");
+      return;
+    }
+
+    const normalized = text
+      .replace(/^\/r\b/, "/roll")
+      .replace(/^\/p\b/, "/power")
+      .replace(/^\/dh\b/, "/duality");
+
+    const shouldUseDicePlus = useDicePlusRef.current && dicePlusAvailableRef.current;
 
     if (normalized.startsWith("/roll")) {
-      const result = parseAndRoll(normalized.slice(5).trim());
+      const notation = normalized.slice(5).trim();
+      if (shouldUseDicePlus && notation) {
+        // Route through Dice+ — don't roll locally, let Dice+ handle it
+        const rollId = generateRollId();
+        const playerId = playerIdRef.current;
+        const playerName = await OBR.player.getName();
+        try {
+          const result = await sendDicePlusRoll(rollId, notation, playerId, playerName);
+          const bonus = result.total - result.dice.reduce((s, d) => s + d.value, 0);
+          sendRoll(result.dice, bonus).catch(console.error);
+        } catch (err) {
+          addSystemMessage(`Dice+ error: ${err}`);
+        }
+        return;
+      }
+      const result = parseAndRoll(notation);
       if (!result) return;
-      setInput("");
       sendRoll(result.dice, result.bonus).catch(console.error);
       return;
     }
 
     if (normalized.startsWith("/power")) {
+      // Power rolls always use the internal roller (per PRD §4.1)
       const result = parsePowerRoll(normalized.slice(6).trim());
       if (!result) return;
-      setInput("");
       sendRoll(result.dice, result.bonus, result.netEdges, result.hasSkill).catch(console.error);
       return;
     }
 
-    setInput("");
+    if (normalized.startsWith("/duality")) {
+      const args = normalized.slice(8).trim();
+      if (shouldUseDicePlus) {
+        // Parse to get metadata, then route through Dice+
+        const parsed = parseDualityRoll(args);
+        if (!parsed) return;
+        const dd = parsed.dualityData;
+        const notation = buildDualityNotation(
+          parsed.bonus,
+          dd.advDie !== undefined,
+          dd.disDie !== undefined,
+          dd.expDice?.length ?? 0,
+          dd.label,
+        );
+        const rollId = generateRollId();
+        const playerId = playerIdRef.current;
+        const playerName = await OBR.player.getName();
+        try {
+          const result = await sendDicePlusRoll(rollId, notation, playerId, playerName, {
+            dualityData: dd,
+          });
+          // Reconstruct dualityData from Dice+ result dice
+          const dice = result.dice;
+          const hopeDie = dice[0]?.value ?? 0;
+          const fearDie = dice[1]?.value ?? 0;
+          const advDie = dd.advDie !== undefined ? (dice[2]?.value ?? 0) : undefined;
+          const disDie = dd.disDie !== undefined ? (dice[2]?.value ?? 0) : undefined;
+          const expStart = 2 + (advDie !== undefined || disDie !== undefined ? 1 : 0);
+          const expDice = dd.expDice ? dice.slice(expStart, expStart + dd.expDice.length).map(d => d.value) : undefined;
+          const outcome = hopeDie === fearDie ? "crit" as const
+            : hopeDie > fearDie ? "hope" as const
+            : "fear" as const;
+          const dualityData = {
+            hopeDie, fearDie,
+            ...(advDie !== undefined && { advDie }),
+            ...(disDie !== undefined && { disDie }),
+            ...(expDice && expDice.length > 0 && { expDice }),
+            outcome,
+            ...(dd.label && { label: dd.label }),
+          };
+          sendRoll(result.dice, parsed.bonus, undefined, undefined, dualityData).catch(console.error);
+        } catch (err) {
+          addSystemMessage(`Dice+ error: ${err}`);
+        }
+        return;
+      }
+      const result = parseDualityRoll(args);
+      if (!result) return;
+      sendRoll(result.dice, result.bonus, undefined, undefined, result.dualityData).catch(console.error);
+      return;
+    }
 
+    if (normalized.startsWith("/hope")) {
+      const result = parseSingleDualityDie("hope", normalized.slice(5).trim());
+      if (!result) return;
+      sendRoll(result.dice, result.bonus, undefined, undefined, result.dualityData).catch(console.error);
+      return;
+    }
+
+    if (normalized.startsWith("/fear")) {
+      const result = parseSingleDualityDie("fear", normalized.slice(5).trim());
+      if (!result) return;
+      sendRoll(result.dice, result.bonus, undefined, undefined, result.dualityData).catch(console.error);
+      return;
+    }
+
+    // --- Alias expansion (once, no recursion) ---
+    if (!fromAlias && text.startsWith("/")) {
+      const aliases = await getAliases();
+      const expanded = expandAlias(text, aliases);
+      if (expanded) {
+        await dispatchCommand(expanded, true);
+        return;
+      }
+    }
+
+    // --- Text message fallback ---
     const msg: ChatMessage = {
       id: newId(),
       playerId: playerIdRef.current,
@@ -436,7 +746,20 @@ export default function App() {
     OBR.broadcast.sendMessage(MSG_BROADCAST_CHANNEL, msg).catch(console.error);
   }
 
-  async function sendRoll(dice: RollDie[], bonus: number, netEdges?: number, hasSkill?: boolean) {
+  function addSystemMessage(text: string) {
+    const msg: ChatMessage = {
+      id: newId(),
+      playerId: "",
+      playerName: "System",
+      playerColor: "#888888",
+      type: "text",
+      text,
+      timestamp: Date.now(),
+    };
+    addMessages([msg]);
+  }
+
+  async function sendRoll(dice: RollDie[], bonus: number, netEdges?: number, hasSkill?: boolean, dualityData?: DualityData) {
     const msg: ChatMessage = {
       id: newId(),
       playerId: playerIdRef.current,
@@ -447,6 +770,7 @@ export default function App() {
       bonus,
       ...(netEdges !== undefined && { netEdges }),
       ...(hasSkill && { hasSkill }),
+      ...(dualityData && { dualityData }),
       timestamp: Date.now(),
     };
 
@@ -468,7 +792,7 @@ export default function App() {
   return (
     <div style={styles.container}>
       <div style={styles.messageList}>
-        {allMessages.length === 0 && helpEntries.length === 0 && (
+        {allMessages.length === 0 && helpEntries.length === 0 && aliasEntries.length === 0 && (
           <div style={styles.empty}>No messages yet. Say hello!</div>
         )}
         {(() => {
@@ -505,10 +829,85 @@ export default function App() {
                   </div>
                 </div>
               </div>
+              <div style={styles.helpSection}>
+                <div><code style={styles.helpCmd}>/duality</code> <span style={styles.helpAlias}>(or /dh)</span></div>
+                <div style={styles.helpIndent}>
+                  <div style={styles.helpExample}>/duality +3 &nbsp;·&nbsp; /dh +2 adv &nbsp;·&nbsp; /dh -1 dis # Finesse</div>
+                  Daggerheart action roll (2d12 Hope/Fear)
+                  <div style={styles.helpOptions}>
+                    <span><code style={styles.helpCmd}>+[x]</code> &nbsp; add modifier</span>
+                    <span><code style={styles.helpCmd}>adv</code> or <code style={styles.helpCmd}>a</code> &nbsp; advantage (+1d6)</span>
+                    <span><code style={styles.helpCmd}>dis</code> or <code style={styles.helpCmd}>d</code> &nbsp; disadvantage (-1d6)</span>
+                    <span><code style={styles.helpCmd}>+d6</code> &nbsp; add Experience die</span>
+                    <span><code style={styles.helpCmd}># label</code> &nbsp; label the roll</span>
+                  </div>
+                </div>
+              </div>
+              <div style={styles.helpSection}>
+                <div><code style={styles.helpCmd}>/hope</code> &nbsp; <code style={styles.helpCmd}>/fear</code></div>
+                <div style={styles.helpIndent}>Roll a single Hope or Fear die (1d12)</div>
+              </div>
+              <div style={styles.helpSection}>
+                <div><code style={styles.helpCmd}>/alias</code> <span style={styles.helpAlias}>&lt;name&gt; &lt;command&gt;</span></div>
+                <div style={styles.helpIndent}>
+                  <div style={styles.helpExample}>/alias atk /roll 1d20+5 &nbsp;·&nbsp; /alias rage /duality +4 adv</div>
+                  Save a command alias
+                </div>
+              </div>
+              <div style={styles.helpSection}>
+                <div><code style={styles.helpCmd}>/aliases</code></div>
+                <div style={styles.helpIndent}>List your saved commands</div>
+              </div>
+              <div style={styles.helpSection}>
+                <div><code style={styles.helpCmd}>/unalias</code> <span style={styles.helpAlias}>&lt;name&gt;</span></div>
+                <div style={styles.helpIndent}>
+                  Remove a saved command. Use <code style={styles.helpCmd}>/unalias * confirm</code> to remove all.
+                </div>
+              </div>
+              <div style={styles.helpSection}>
+                <div><code style={styles.helpCmd}>/dicePlus</code> <span style={styles.helpAlias}>on | off | status</span></div>
+                <div style={styles.helpIndent}>
+                  Enable/disable Dice+ 3D dice for /roll and /duality commands (requires Dice+ extension)
+                </div>
+              </div>
             </div>
           );
+          // Build alias card anchors
+          const aliasAfter = new Map<string, Array<{ key: number; aliases: Record<string, string> }>>();
+          for (const entry of aliasEntries) {
+            const list = aliasAfter.get(entry.anchorId) ?? [];
+            list.push({ key: entry.key, aliases: entry.aliases });
+            aliasAfter.set(entry.anchorId, list);
+          }
+          const aliasCard = (key: number, aliases: Record<string, string>) => {
+            const entries = Object.entries(aliases);
+            return (
+              <div key={`alias-${key}`} style={styles.helpCard}>
+                <div style={styles.helpHeader}>
+                  <span style={styles.helpTitle}>Your saved commands</span>
+                </div>
+                {entries.length === 0 ? (
+                  <div style={{ color: "#666" }}>No aliases saved. Use /alias &lt;name&gt; &lt;command&gt; to add one.</div>
+                ) : (
+                  <>
+                    {entries.map(([name, value]) => (
+                      <div key={name} style={{ fontFamily: "monospace", fontSize: "12px", color: "#aaa" }}>
+                        <code style={styles.helpCmd}>/{name}</code>{" "}
+                        <span style={{ color: "#555" }}>{"\u2192"}</span>{" "}
+                        <span style={{ color: "#888" }}>{value}</span>
+                      </div>
+                    ))}
+                    <div style={{ color: "#555", fontSize: "11px", marginTop: "4px" }}>
+                      ({entries.length} of 50 used)
+                    </div>
+                  </>
+                )}
+              </div>
+            );
+          };
           const items: React.ReactNode[] = [];
           for (const key of helpAfter.get("") ?? []) items.push(helpCard(key));
+          for (const e of aliasAfter.get("") ?? []) items.push(aliasCard(e.key, e.aliases));
           for (const msg of allMessages) {
             items.push(
               <div key={msg.id} style={styles.message}>
@@ -522,6 +921,7 @@ export default function App() {
               </div>
             );
             for (const key of helpAfter.get(msg.id) ?? []) items.push(helpCard(key));
+            for (const e of aliasAfter.get(msg.id) ?? []) items.push(aliasCard(e.key, e.aliases));
           }
           return items;
         })()}

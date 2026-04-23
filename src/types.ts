@@ -16,12 +16,23 @@ export interface TextMessage extends ChatMessageBase {
   text: string;
 }
 
+export interface DualityData {
+  hopeDie: number;
+  fearDie: number;
+  advDie?: number;
+  disDie?: number;
+  expDice?: number[];
+  outcome: "hope" | "fear" | "crit";
+  label?: string;
+}
+
 export interface RollMessage extends ChatMessageBase {
   type: "roll";
   dice: RollDie[];
   bonus: number;
   netEdges?: number; // present on power rolls
   hasSkill?: boolean; // present on power rolls when applicable skill used
+  dualityData?: DualityData; // present on duality rolls
 }
 
 export type ChatMessage = TextMessage | RollMessage;
