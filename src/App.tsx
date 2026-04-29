@@ -6,6 +6,9 @@ import { expandAlias } from "./aliases/dispatch";
 import { parseDualityRoll, parseSingleDualityDie } from "./roll/parseDualityRoll";
 import { isDicePlusAvailable, getDicePlusEnabled, setDicePlusEnabled, generateRollId, sendDicePlusRoll, registerDicePlusListeners } from "./dicePlus/client";
 import { buildDualityNotation } from "./dicePlus/convert";
+import { useSystemMessages } from "./systemMessages/useSystemMessages";
+import { SystemMessage } from "./systemMessages/types";
+import { MAX_ALIASES } from "./aliases/validation";
 
 const DICE_PREFIX = "rodeo.owlbear.dice/";
 const CHAT_STATUS_CHANNEL = "com.hootchat/chat-status";
@@ -314,6 +317,43 @@ function RollDisplay({ msg }: { msg: { dice: RollDie[]; bonus: number; netEdges?
   );
 }
 
+function SystemMessageDisplay({ msg }: { msg: SystemMessage }) {
+  if (msg.content.type === "aliasList") {
+    const entries = Object.entries(msg.content.aliases);
+    return (
+      <div style={styles.helpCard}>
+        <div style={styles.helpHeader}>
+          <span style={styles.helpTitle}>Your saved commands</span>
+        </div>
+        {entries.length === 0 ? (
+          <div style={{ color: "#666" }}>
+            No aliases saved. Use /alias &lt;name&gt; &lt;command&gt; to add one.
+          </div>
+        ) : (
+          <>
+            {entries.map(([name, value]) => (
+              <div key={name} style={{ fontFamily: "monospace", fontSize: "12px", color: "#aaa" }}>
+                <code style={styles.helpCmd}>/{name}</code>{" "}
+                <span style={{ color: "#555" }}>{"\u2192"}</span>{" "}
+                <span style={{ color: "#888" }}>{value}</span>
+              </div>
+            ))}
+            <div style={{ color: "#555", fontSize: "11px", marginTop: "4px" }}>
+              ({entries.length} of {MAX_ALIASES} used)
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div style={styles.helpCard}>
+      <span>{msg.content.text}</span>
+    </div>
+  );
+}
+
 // --- component ---
 
 export default function App() {
@@ -321,7 +361,7 @@ export default function App() {
   const [allMessages, setAllMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [helpEntries, setHelpEntries] = useState<{ anchorId: string; key: number }[]>([]);
-  const [aliasEntries, setAliasEntries] = useState<{ anchorId: string; key: number; aliases: Record<string, string> }[]>([]);
+  const { systemMessages, pushSystemMessage } = useSystemMessages();
 
   const playerIdRef = useRef("");
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -523,8 +563,8 @@ export default function App() {
   }, [helpEntries.length]);
 
   useEffect(() => {
-    if (aliasEntries.length > 0) bottomRef.current?.scrollIntoView({ behavior: "instant" });
-  }, [aliasEntries.length]);
+    if (systemMessages.length > 0) bottomRef.current?.scrollIntoView({ behavior: "instant" });
+  }, [systemMessages.length]);
 
   async function sendMessage() {
     const text = input.trim();
@@ -544,27 +584,26 @@ export default function App() {
       const rest = text.slice(7).trim();
       const spaceIdx = rest.indexOf(" ");
       if (spaceIdx === -1) {
-        addSystemMessage("Usage: /alias <name> <command>");
+        pushSystemMessage("error", { type: "text", text: "Usage: /alias <name> <command>" });
         return;
       }
       const name = rest.slice(0, spaceIdx);
       const value = rest.slice(spaceIdx + 1).trim();
       const err = await setAlias(name, value);
       if (err) {
-        addSystemMessage(aliasErrorMessage(err));
+        pushSystemMessage("error", { type: "text", text: aliasErrorMessage(err) });
       } else {
-        addSystemMessage(`Alias saved: /${name} \u2192 ${value}`);
+        pushSystemMessage("success", {
+          type: "text",
+          text: `Alias saved: /${name} \u2192 ${value}`,
+        });
       }
       return;
     }
 
     if (text === "/aliases") {
       const aliases = await getAliases();
-      setAliasEntries((prev) => [...prev, {
-        anchorId: allMessagesRef.current[allMessagesRef.current.length - 1]?.id ?? "",
-        key: Date.now(),
-        aliases,
-      }]);
+      pushSystemMessage("info", { type: "aliasList", aliases });
       return;
     }
 
@@ -572,18 +611,21 @@ export default function App() {
       const rest = text.slice(9).trim();
       if (rest === "* confirm") {
         await removeAllAliases();
-        addSystemMessage("All aliases removed.");
+        pushSystemMessage("success", { type: "text", text: "All aliases removed." });
         return;
       }
       if (rest === "*") {
-        addSystemMessage("To remove all aliases, use: /unalias * confirm");
+        pushSystemMessage("info", {
+          type: "text",
+          text: "To remove all aliases, use: /unalias * confirm",
+        });
         return;
       }
       const err = await removeAlias(rest);
       if (err) {
-        addSystemMessage(aliasErrorMessage(err));
+        pushSystemMessage("error", { type: "text", text: aliasErrorMessage(err) });
       } else {
-        addSystemMessage(`Alias removed: ${rest}`);
+        pushSystemMessage("success", { type: "text", text: `Alias removed: ${rest}` });
       }
       return;
     }
@@ -597,24 +639,41 @@ export default function App() {
         if (!dicePlusAvailableRef.current) {
           dicePlusAvailableRef.current = await isDicePlusAvailable();
         }
-        addSystemMessage(dicePlusAvailableRef.current
-          ? "Dice+ enabled. Rolls will use 3D dice."
-          : "Dice+ enabled, but the extension was not detected. Rolls will use the internal roller until Dice+ is available.");
+        if (dicePlusAvailableRef.current) {
+          pushSystemMessage("success", {
+            type: "text",
+            text: "Dice+ enabled. Rolls will use 3D dice.",
+          });
+        } else {
+          pushSystemMessage("info", {
+            type: "text",
+            text: "Dice+ enabled, but the extension was not detected. Rolls will use the internal roller until Dice+ is available.",
+          });
+        }
         return;
       }
       if (arg === "off") {
         await setDicePlusEnabled(false);
         useDicePlusRef.current = false;
-        addSystemMessage("Dice+ disabled. Rolls will use the internal roller.");
+        pushSystemMessage("success", {
+          type: "text",
+          text: "Dice+ disabled. Rolls will use the internal roller.",
+        });
         return;
       }
       if (arg === "status") {
         const enabled = useDicePlusRef.current;
         const available = dicePlusAvailableRef.current;
-        addSystemMessage(`Dice+: ${enabled ? "enabled" : "disabled"}, ${available ? "available" : "not detected"}`);
+        pushSystemMessage("info", {
+          type: "text",
+          text: `Dice+: ${enabled ? "enabled" : "disabled"}, ${available ? "available" : "not detected"}`,
+        });
         return;
       }
-      addSystemMessage("Usage: /dicePlus on | off | status");
+      pushSystemMessage("info", {
+        type: "text",
+        text: "Usage: /dicePlus on | off | status",
+      });
       return;
     }
 
@@ -637,7 +696,7 @@ export default function App() {
           const bonus = result.total - result.dice.reduce((s, d) => s + d.value, 0);
           sendRoll(result.dice, bonus).catch(console.error);
         } catch (err) {
-          addSystemMessage(`Dice+ error: ${err}`);
+          pushSystemMessage("error", { type: "text", text: `Dice+ error: ${err}` });
         }
         return;
       }
@@ -697,7 +756,7 @@ export default function App() {
           };
           sendRoll(result.dice, parsed.bonus, undefined, undefined, dualityData).catch(console.error);
         } catch (err) {
-          addSystemMessage(`Dice+ error: ${err}`);
+          pushSystemMessage("error", { type: "text", text: `Dice+ error: ${err}` });
         }
         return;
       }
@@ -746,19 +805,6 @@ export default function App() {
     OBR.broadcast.sendMessage(MSG_BROADCAST_CHANNEL, msg).catch(console.error);
   }
 
-  function addSystemMessage(text: string) {
-    const msg: ChatMessage = {
-      id: newId(),
-      playerId: "",
-      playerName: "System",
-      playerColor: "#888888",
-      type: "text",
-      text,
-      timestamp: Date.now(),
-    };
-    addMessages([msg]);
-  }
-
   async function sendRoll(dice: RollDie[], bonus: number, netEdges?: number, hasSkill?: boolean, dualityData?: DualityData) {
     const msg: ChatMessage = {
       id: newId(),
@@ -792,7 +838,7 @@ export default function App() {
   return (
     <div style={styles.container}>
       <div style={styles.messageList}>
-        {allMessages.length === 0 && helpEntries.length === 0 && aliasEntries.length === 0 && (
+        {allMessages.length === 0 && helpEntries.length === 0 && systemMessages.length === 0 && (
           <div style={styles.empty}>No messages yet. Say hello!</div>
         )}
         {(() => {
@@ -872,56 +918,38 @@ export default function App() {
               </div>
             </div>
           );
-          // Build alias card anchors
-          const aliasAfter = new Map<string, Array<{ key: number; aliases: Record<string, string> }>>();
-          for (const entry of aliasEntries) {
-            const list = aliasAfter.get(entry.anchorId) ?? [];
-            list.push({ key: entry.key, aliases: entry.aliases });
-            aliasAfter.set(entry.anchorId, list);
-          }
-          const aliasCard = (key: number, aliases: Record<string, string>) => {
-            const entries = Object.entries(aliases);
-            return (
-              <div key={`alias-${key}`} style={styles.helpCard}>
-                <div style={styles.helpHeader}>
-                  <span style={styles.helpTitle}>Your saved commands</span>
-                </div>
-                {entries.length === 0 ? (
-                  <div style={{ color: "#666" }}>No aliases saved. Use /alias &lt;name&gt; &lt;command&gt; to add one.</div>
-                ) : (
-                  <>
-                    {entries.map(([name, value]) => (
-                      <div key={name} style={{ fontFamily: "monospace", fontSize: "12px", color: "#aaa" }}>
-                        <code style={styles.helpCmd}>/{name}</code>{" "}
-                        <span style={{ color: "#555" }}>{"\u2192"}</span>{" "}
-                        <span style={{ color: "#888" }}>{value}</span>
-                      </div>
-                    ))}
-                    <div style={{ color: "#555", fontSize: "11px", marginTop: "4px" }}>
-                      ({entries.length} of 50 used)
-                    </div>
-                  </>
-                )}
+          // Timestamp-merge persistent messages with local-only system
+          // messages for display only. The persistent array passed to
+          // writeHistory is untouched — see writeHistory() and addMessages().
+          type DisplayItem =
+            | { kind: "chat"; msg: ChatMessage }
+            | { kind: "system"; msg: SystemMessage };
+          const merged: DisplayItem[] = [
+            ...allMessages.map((msg): DisplayItem => ({ kind: "chat", msg })),
+            ...systemMessages.map((msg): DisplayItem => ({ kind: "system", msg })),
+          ].sort((a, b) => a.msg.timestamp - b.msg.timestamp);
+
+          const renderChat = (msg: ChatMessage) => (
+            <div key={msg.id} style={styles.message}>
+              <span style={{ ...styles.name, ...nameStyle(msg.playerColor) }}>
+                {msg.playerName}
+              </span>
+              <span style={styles.time}>{formatTime(msg.timestamp)}</span>
+              <div style={styles.text}>
+                {msg.type === "roll" ? <RollDisplay msg={msg} /> : msg.text}
               </div>
-            );
-          };
+            </div>
+          );
+
           const items: React.ReactNode[] = [];
           for (const key of helpAfter.get("") ?? []) items.push(helpCard(key));
-          for (const e of aliasAfter.get("") ?? []) items.push(aliasCard(e.key, e.aliases));
-          for (const msg of allMessages) {
-            items.push(
-              <div key={msg.id} style={styles.message}>
-                <span style={{ ...styles.name, ...nameStyle(msg.playerColor) }}>
-                  {msg.playerName}
-                </span>
-                <span style={styles.time}>{formatTime(msg.timestamp)}</span>
-                <div style={styles.text}>
-                  {msg.type === "roll" ? <RollDisplay msg={msg} /> : msg.text}
-                </div>
-              </div>
-            );
-            for (const key of helpAfter.get(msg.id) ?? []) items.push(helpCard(key));
-            for (const e of aliasAfter.get(msg.id) ?? []) items.push(aliasCard(e.key, e.aliases));
+          for (const item of merged) {
+            if (item.kind === "chat") {
+              items.push(renderChat(item.msg));
+              for (const key of helpAfter.get(item.msg.id) ?? []) items.push(helpCard(key));
+            } else {
+              items.push(<SystemMessageDisplay key={`sys-${item.msg.id}`} msg={item.msg} />);
+            }
           }
           return items;
         })()}
