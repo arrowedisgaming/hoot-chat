@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Daggerheart Duality Roll**: `/duality` (alias `/dh`) command for 2d12 Hope/Fear action rolls with advantage/disadvantage, Experience dice, and labels. Includes `/hope` and `/fear` single-die variants. Outcome badges (Hope/Fear/Critical) with color-coded display and crit Stress reminder.
 - **Saved Commands (Aliases)**: `/alias`, `/aliases`, `/unalias` commands for per-player stored command shortcuts. Aliases expand once on invocation (no recursion). Supports up to 50 aliases per player with validation.
 - **Dice+ Integration**: Optional per-player routing of `/roll` and `/duality` commands through the Dice+ 3D dice extension. Toggle with `/dicePlus on|off|status`. Graceful fallback when Dice+ is not installed.
+- **System message formatting**: confirmations, errors, and informational notices render with kind-keyed styling (`success`, `error`, `info`).
 - Plain TypeScript test files for duality roll parsing, alias validation/expansion, and Dice+ result conversion.
 
 ### Fixed

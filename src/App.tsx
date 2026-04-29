@@ -318,10 +318,15 @@ function RollDisplay({ msg }: { msg: { dice: RollDie[]; bonus: number; netEdges?
 }
 
 function SystemMessageDisplay({ msg }: { msg: SystemMessage }) {
+  const cardStyle = {
+    ...styles.systemCard,
+    ...systemKindStyles[msg.kind],
+  };
+
   if (msg.content.type === "aliasList") {
     const entries = Object.entries(msg.content.aliases);
     return (
-      <div style={styles.helpCard}>
+      <div style={cardStyle}>
         <div style={styles.helpHeader}>
           <span style={styles.helpTitle}>Your saved commands</span>
         </div>
@@ -348,8 +353,8 @@ function SystemMessageDisplay({ msg }: { msg: SystemMessage }) {
   }
 
   return (
-    <div style={styles.helpCard}>
-      <span>{msg.content.text}</span>
+    <div style={cardStyle}>
+      <span style={systemKindTextStyles[msg.kind]}>{msg.content.text}</span>
     </div>
   );
 }
@@ -1054,6 +1059,14 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "12px",
     color: "#666",
   },
+  systemCard: {
+    borderRadius: "8px",
+    padding: "8px 12px",
+    fontSize: "13px",
+    display: "flex",
+    flexDirection: "column",
+    gap: "6px",
+  },
   message: {
     display: "grid",
     gridTemplateColumns: "1fr auto",
@@ -1103,4 +1116,33 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 600,
     fontSize: "13px",
   },
+};
+
+// Kind-keyed system message styling. Card weight matches `helpCard` so output
+// reads as a system response, not a chat line. `error` uses a desaturated
+// version of FEAR_COLOR for visual continuity with the existing red used in
+// duality rolls; `success` uses a muted green; `info` matches the muted
+// purple accent already used for help cards.
+const systemKindStyles: Record<"info" | "success" | "error", React.CSSProperties> = {
+  info: {
+    background: "rgba(91, 91, 214, 0.10)",
+    border: "1px solid rgba(91, 91, 214, 0.30)",
+    color: "#aaa",
+  },
+  success: {
+    background: "rgba(74, 222, 128, 0.10)",
+    border: "1px solid rgba(74, 222, 128, 0.30)",
+    color: "#a7f3c0",
+  },
+  error: {
+    background: "rgba(220, 38, 38, 0.10)",
+    border: "1px solid rgba(220, 38, 38, 0.40)",
+    color: "#fca5a5",
+  },
+};
+
+const systemKindTextStyles: Record<"info" | "success" | "error", React.CSSProperties> = {
+  info: { color: "#aaa" },
+  success: { color: "#a7f3c0", fontWeight: 600 },
+  error: { color: "#fca5a5", fontWeight: 600 },
 };
