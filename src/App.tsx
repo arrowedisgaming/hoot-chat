@@ -5,7 +5,7 @@ import { getAliases, setAlias, removeAlias, removeAllAliases, aliasErrorMessage 
 import { expandAlias } from "./aliases/dispatch";
 import { parseDualityRoll, parseSingleDualityDie } from "./roll/parseDualityRoll";
 import { isDicePlusAvailable, getDicePlusEnabled, setDicePlusEnabled, generateRollId, sendDicePlusRoll, registerDicePlusListeners } from "./dicePlus/client";
-import { buildDualityNotation } from "./dicePlus/convert";
+import { buildDualityNotation, buildPowerNotation, buildSingleDualityDieNotation } from "./dicePlus/convert";
 import { useSystemMessages } from "./systemMessages/useSystemMessages";
 import { SystemMessage } from "./systemMessages/types";
 import { MAX_ALIASES } from "./aliases/validation";
@@ -16,8 +16,41 @@ const STATUS_REQUEST_CHANNEL = "com.hootchat/status-request";
 const MSG_BROADCAST_CHANNEL = "com.hootchat/message";
 const HISTORY_KEY = "com.hootchat/history";
 const HISTORY_MAX_BYTES = 4 * 1024;
+const LOCAL_HELP_ENTRIES_KEY = "com.hootchat/helpEntries/local";
+
+type HelpEntry = { anchorId: string; key: number };
 
 // --- helpers ---
+
+function isHelpEntry(raw: unknown): raw is HelpEntry {
+  return (
+    raw !== null
+    && typeof raw === "object"
+    && "anchorId" in raw
+    && "key" in raw
+    && typeof raw.anchorId === "string"
+    && typeof raw.key === "number"
+  );
+}
+
+function readLocalHelpEntries(): HelpEntry[] {
+  try {
+    const raw = window.localStorage.getItem(LOCAL_HELP_ENTRIES_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter(isHelpEntry) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeLocalHelpEntries(entries: HelpEntry[]): void {
+  try {
+    window.localStorage.setItem(LOCAL_HELP_ENTRIES_KEY, JSON.stringify(entries));
+  } catch {
+    // Help cards are display-only; if localStorage is blocked, they remain session-only.
+  }
+}
 
 function hexLuminance(hex: string): number {
   const m = hex.replace("#", "").match(/.{2}/g);
@@ -320,7 +353,7 @@ function RollDisplay({ msg }: { msg: { dice: RollDie[]; bonus: number; netEdges?
 function SystemMessageDisplay({ msg }: { msg: SystemMessage }) {
   const cardStyle = {
     ...styles.systemCard,
-    ...systemKindStyles[msg.kind],
+    ...systemCardStyle,
   };
 
   if (msg.content.type === "aliasList") {
@@ -328,22 +361,22 @@ function SystemMessageDisplay({ msg }: { msg: SystemMessage }) {
     return (
       <div style={cardStyle}>
         <div style={styles.helpHeader}>
-          <span style={styles.helpTitle}>Your saved commands</span>
+          <span style={styles.systemTitle}>Your saved commands</span>
         </div>
         {entries.length === 0 ? (
-          <div style={{ color: "#666" }}>
+          <div style={styles.systemMutedText}>
             No aliases saved. Use /alias &lt;name&gt; &lt;command&gt; to add one.
           </div>
         ) : (
           <>
             {entries.map(([name, value]) => (
-              <div key={name} style={{ fontFamily: "monospace", fontSize: "12px", color: "#aaa" }}>
-                <code style={styles.helpCmd}>/{name}</code>{" "}
-                <span style={{ color: "#555" }}>{"\u2192"}</span>{" "}
-                <span style={{ color: "#888" }}>{value}</span>
+              <div key={name} style={styles.systemAliasRow}>
+                <code style={styles.systemCmd}>/{name}</code>{" "}
+                <span style={styles.systemMutedText}>{"\u2192"}</span>{" "}
+                <span style={styles.systemAliasValue}>{value}</span>
               </div>
             ))}
-            <div style={{ color: "#555", fontSize: "11px", marginTop: "4px" }}>
+            <div style={styles.systemCountText}>
               ({entries.length} of {MAX_ALIASES} used)
             </div>
           </>
@@ -354,7 +387,7 @@ function SystemMessageDisplay({ msg }: { msg: SystemMessage }) {
 
   return (
     <div style={cardStyle}>
-      <span style={systemKindTextStyles[msg.kind]}>{msg.content.text}</span>
+      <span style={systemTextStyle}>{msg.content.text}</span>
     </div>
   );
 }
@@ -365,7 +398,7 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const [allMessages, setAllMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
-  const [helpEntries, setHelpEntries] = useState<{ anchorId: string; key: number }[]>([]);
+  const [helpEntries, setHelpEntries] = useState<HelpEntry[]>(readLocalHelpEntries);
   const { systemMessages, pushSystemMessage } = useSystemMessages();
 
   const playerIdRef = useRef("");
@@ -568,8 +601,19 @@ export default function App() {
   }, [helpEntries.length]);
 
   useEffect(() => {
+    writeLocalHelpEntries(helpEntries);
+  }, [helpEntries]);
+
+  useEffect(() => {
     if (systemMessages.length > 0) bottomRef.current?.scrollIntoView({ behavior: "instant" });
   }, [systemMessages.length]);
+
+  async function ensureDicePlusAvailable(): Promise<boolean> {
+    if (!useDicePlusRef.current) return false;
+    if (dicePlusAvailableRef.current) return true;
+    dicePlusAvailableRef.current = await isDicePlusAvailable();
+    return dicePlusAvailableRef.current;
+  }
 
   async function sendMessage() {
     const text = input.trim();
@@ -668,7 +712,7 @@ export default function App() {
       }
       if (arg === "status") {
         const enabled = useDicePlusRef.current;
-        const available = dicePlusAvailableRef.current;
+        const available = enabled ? await ensureDicePlusAvailable() : dicePlusAvailableRef.current;
         pushSystemMessage("info", {
           type: "text",
           text: `Dice+: ${enabled ? "enabled" : "disabled"}, ${available ? "available" : "not detected"}`,
@@ -687,7 +731,7 @@ export default function App() {
       .replace(/^\/p\b/, "/power")
       .replace(/^\/dh\b/, "/duality");
 
-    const shouldUseDicePlus = useDicePlusRef.current && dicePlusAvailableRef.current;
+    const shouldUseDicePlus = await ensureDicePlusAvailable();
 
     if (normalized.startsWith("/roll")) {
       const notation = normalized.slice(5).trim();
@@ -712,9 +756,26 @@ export default function App() {
     }
 
     if (normalized.startsWith("/power")) {
-      // Power rolls always use the internal roller (per PRD §4.1)
       const result = parsePowerRoll(normalized.slice(6).trim());
       if (!result) return;
+      if (shouldUseDicePlus) {
+        const rollId = generateRollId();
+        const playerId = playerIdRef.current;
+        const playerName = await OBR.player.getName();
+        try {
+          const dicePlusResult = await sendDicePlusRoll(
+            rollId,
+            buildPowerNotation(result.bonus),
+            playerId,
+            playerName,
+            { netEdges: result.netEdges, hasSkill: result.hasSkill },
+          );
+          sendRoll(dicePlusResult.dice, result.bonus, result.netEdges, result.hasSkill).catch(console.error);
+        } catch (err) {
+          pushSystemMessage("error", { type: "text", text: `Dice+ error: ${err}` });
+        }
+        return;
+      }
       sendRoll(result.dice, result.bonus, result.netEdges, result.hasSkill).catch(console.error);
       return;
     }
@@ -774,6 +835,29 @@ export default function App() {
     if (normalized.startsWith("/hope")) {
       const result = parseSingleDualityDie("hope", normalized.slice(5).trim());
       if (!result) return;
+      if (shouldUseDicePlus) {
+        const rollId = generateRollId();
+        const playerId = playerIdRef.current;
+        const playerName = await OBR.player.getName();
+        try {
+          const dicePlusResult = await sendDicePlusRoll(
+            rollId,
+            buildSingleDualityDieNotation("hope", result.bonus, result.dualityData.label),
+            playerId,
+            playerName,
+            { dualityData: result.dualityData },
+          );
+          const hopeDie = dicePlusResult.dice[0]?.value ?? 0;
+          sendRoll(dicePlusResult.dice, result.bonus, undefined, undefined, {
+            ...result.dualityData,
+            hopeDie,
+            fearDie: 0,
+          }).catch(console.error);
+        } catch (err) {
+          pushSystemMessage("error", { type: "text", text: `Dice+ error: ${err}` });
+        }
+        return;
+      }
       sendRoll(result.dice, result.bonus, undefined, undefined, result.dualityData).catch(console.error);
       return;
     }
@@ -781,6 +865,29 @@ export default function App() {
     if (normalized.startsWith("/fear")) {
       const result = parseSingleDualityDie("fear", normalized.slice(5).trim());
       if (!result) return;
+      if (shouldUseDicePlus) {
+        const rollId = generateRollId();
+        const playerId = playerIdRef.current;
+        const playerName = await OBR.player.getName();
+        try {
+          const dicePlusResult = await sendDicePlusRoll(
+            rollId,
+            buildSingleDualityDieNotation("fear", result.bonus, result.dualityData.label),
+            playerId,
+            playerName,
+            { dualityData: result.dualityData },
+          );
+          const fearDie = dicePlusResult.dice[0]?.value ?? 0;
+          sendRoll(dicePlusResult.dice, result.bonus, undefined, undefined, {
+            ...result.dualityData,
+            hopeDie: 0,
+            fearDie,
+          }).catch(console.error);
+        } catch (err) {
+          pushSystemMessage("error", { type: "text", text: `Dice+ error: ${err}` });
+        }
+        return;
+      }
       sendRoll(result.dice, result.bonus, undefined, undefined, result.dualityData).catch(console.error);
       return;
     }
@@ -848,12 +955,15 @@ export default function App() {
         )}
         {(() => {
           // Build a map from anchorId -> help keys to insert after that message.
-          // anchorId "" means insert before all messages.
+          // anchorId "" means insert before all messages. If an old anchor
+          // fell out of retained history, keep the help card visible at top.
+          const knownMessageIds = new Set(allMessages.map((m) => m.id));
           const helpAfter = new Map<string, number[]>();
           for (const { anchorId, key } of helpEntries) {
-            const list = helpAfter.get(anchorId) ?? [];
+            const resolvedAnchorId = anchorId === "" || knownMessageIds.has(anchorId) ? anchorId : "";
+            const list = helpAfter.get(resolvedAnchorId) ?? [];
             list.push(key);
-            helpAfter.set(anchorId, list);
+            helpAfter.set(resolvedAnchorId, list);
           }
           const helpCard = (key: number) => (
             <div key={`help-${key}`} style={styles.helpCard}>
@@ -1025,6 +1135,11 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 700,
     fontSize: "14px",
   },
+  systemTitle: {
+    color: "#a7f3c0",
+    fontWeight: 700,
+    fontSize: "14px",
+  },
   helpSection: {
     display: "flex",
     flexDirection: "column",
@@ -1058,6 +1173,29 @@ const styles: Record<string, React.CSSProperties> = {
     gap: "2px",
     fontSize: "12px",
     color: "#666",
+  },
+  systemCmd: {
+    color: "#a7f3c0",
+    fontFamily: "monospace",
+    background: "rgba(74,222,128,0.10)",
+    borderRadius: "3px",
+    padding: "0 3px",
+  },
+  systemAliasRow: {
+    fontFamily: "monospace",
+    fontSize: "12px",
+    color: "#a7f3c0",
+  },
+  systemAliasValue: {
+    color: "#a7f3c0",
+  },
+  systemMutedText: {
+    color: "rgba(167, 243, 192, 0.72)",
+  },
+  systemCountText: {
+    color: "rgba(167, 243, 192, 0.60)",
+    fontSize: "11px",
+    marginTop: "4px",
   },
   systemCard: {
     borderRadius: "8px",
@@ -1118,31 +1256,15 @@ const styles: Record<string, React.CSSProperties> = {
   },
 };
 
-// Kind-keyed system message styling. Card weight matches `helpCard` so output
-// reads as a system response, not a chat line. `error` uses a desaturated
-// version of FEAR_COLOR for visual continuity with the existing red used in
-// duality rolls; `success` uses a muted green; `info` matches the muted
-// purple accent already used for help cards.
-const systemKindStyles: Record<"info" | "success" | "error", React.CSSProperties> = {
-  info: {
-    background: "rgba(91, 91, 214, 0.10)",
-    border: "1px solid rgba(91, 91, 214, 0.30)",
-    color: "#aaa",
-  },
-  success: {
-    background: "rgba(74, 222, 128, 0.10)",
-    border: "1px solid rgba(74, 222, 128, 0.30)",
-    color: "#a7f3c0",
-  },
-  error: {
-    background: "rgba(220, 38, 38, 0.10)",
-    border: "1px solid rgba(220, 38, 38, 0.40)",
-    color: "#fca5a5",
-  },
+// Shared system message styling. Message kinds still exist for behavior, but
+// confirmations, notices, and command errors all render as local system output.
+const systemCardStyle: React.CSSProperties = {
+  background: "rgba(74, 222, 128, 0.10)",
+  border: "1px solid rgba(74, 222, 128, 0.30)",
+  color: "#a7f3c0",
 };
 
-const systemKindTextStyles: Record<"info" | "success" | "error", React.CSSProperties> = {
-  info: { color: "#aaa" },
-  success: { color: "#a7f3c0", fontWeight: 600 },
-  error: { color: "#fca5a5", fontWeight: 600 },
+const systemTextStyle: React.CSSProperties = {
+  color: "#a7f3c0",
+  fontWeight: 600,
 };

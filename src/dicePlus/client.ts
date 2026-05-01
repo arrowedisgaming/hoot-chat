@@ -8,8 +8,9 @@ const ERROR_CHANNEL = `${SOURCE}/roll-error`;
 const DICE_PLUS_READY_CHANNEL = "dice-plus/isReady";
 const DICE_PLUS_ROLL_CHANNEL = "dice-plus/roll-request";
 const PENDING_TIMEOUT_MS = 15_000;
-const READY_TIMEOUT_MS = 1_000;
+const READY_TIMEOUT_MS = 3_000;
 const PLAYER_DICE_PLUS_KEY = "com.hootchat/useDicePlus";
+const LOCAL_DICE_PLUS_KEY = `${PLAYER_DICE_PLUS_KEY}/local`;
 
 export interface PendingRoll {
   timestamp: number;
@@ -21,6 +22,25 @@ export interface PendingRoll {
 }
 
 const pendingRolls = new Map<string, PendingRoll>();
+
+function readLocalDicePlusEnabled(): boolean | undefined {
+  try {
+    const raw = window.localStorage.getItem(LOCAL_DICE_PLUS_KEY);
+    if (raw === "true") return true;
+    if (raw === "false") return false;
+  } catch {
+    // localStorage can be unavailable in restricted iframe contexts.
+  }
+  return undefined;
+}
+
+function writeLocalDicePlusEnabled(enabled: boolean): void {
+  try {
+    window.localStorage.setItem(LOCAL_DICE_PLUS_KEY, String(enabled));
+  } catch {
+    // Owlbear metadata remains the fallback when localStorage is unavailable.
+  }
+}
 
 /**
  * Check if Dice+ extension is installed and responsive.
@@ -50,14 +70,20 @@ export async function isDicePlusAvailable(): Promise<boolean> {
  * Read the player's Dice+ preference from metadata.
  */
 export async function getDicePlusEnabled(): Promise<boolean> {
+  const localEnabled = readLocalDicePlusEnabled();
+  if (localEnabled !== undefined) return localEnabled;
+
   const meta = await OBR.player.getMetadata();
-  return meta[PLAYER_DICE_PLUS_KEY] === true;
+  const enabled = meta[PLAYER_DICE_PLUS_KEY] === true;
+  writeLocalDicePlusEnabled(enabled);
+  return enabled;
 }
 
 /**
  * Set the player's Dice+ preference.
  */
 export async function setDicePlusEnabled(enabled: boolean): Promise<void> {
+  writeLocalDicePlusEnabled(enabled);
   await OBR.player.setMetadata({ [PLAYER_DICE_PLUS_KEY]: enabled });
 }
 

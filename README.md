@@ -50,11 +50,11 @@ Save frequently used rolls as short aliases:
 /atk                         --> expands to /roll 1d20+5
 ```
 
-Aliases are per-player (max 50, stored in player metadata). Use `/unalias * confirm` to clear all.
+Aliases are per-browser and mirrored to Owlbear player metadata (max 50). Use `/unalias * confirm` to clear all.
 
 ### Dice+ Integration
 
-When the [Dice+](https://extensions.owlbear.rodeo/dice-plus) extension is installed, enable 3D physics dice for `/roll` and `/duality` commands:
+When the [Dice+](https://extensions.owlbear.rodeo/dice-plus) extension is installed, enable 3D physics dice for `/roll`, `/power`, `/duality`, `/hope`, and `/fear` commands:
 
 ```
 /dicePlus on       Enable 3D dice
@@ -62,7 +62,7 @@ When the [Dice+](https://extensions.owlbear.rodeo/dice-plus) extension is instal
 /dicePlus status   Check current state
 ```
 
-The setting is per-player. `/power` always uses the internal roller. If Dice+ is not detected, rolls silently fall back to the internal roller.
+The setting is stored per browser and mirrored to Owlbear player metadata. If Dice+ is not detected, rolls silently fall back to the internal roller.
 
 ## Development
 
@@ -70,6 +70,16 @@ The setting is per-player. `/power` always uses the internal roller. If Dice+ is
 npm install
 npm run dev
 ```
+
+For local Owlbear Rodeo testing, install the running dev server as a custom extension:
+
+```
+http://localhost:5173/manifest.json
+```
+
+If the production Hoot Chat extension is already installed in the room, disable or remove it while testing so the local build is the only active copy.
+
+Local UI state such as Dice+ status, aliases, displayed `/help` cards, and green system messages is stored in browser localStorage so it survives page refreshes during Owlbear Rodeo testing.
 
 To build for production:
 

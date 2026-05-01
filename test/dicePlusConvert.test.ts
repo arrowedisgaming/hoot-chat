@@ -1,4 +1,10 @@
-import { convertDicePlusResult, buildDualityNotation, DicePlusResult } from "../src/dicePlus/convert";
+import {
+  convertDicePlusResult,
+  buildDualityNotation,
+  buildPowerNotation,
+  buildSingleDualityDieNotation,
+  DicePlusResult,
+} from "../src/dicePlus/convert";
 
 let passed = 0;
 let failed = 0;
@@ -152,6 +158,20 @@ function assert(condition: boolean, msg: string) {
 
   const n7 = buildDualityNotation(0, true, false, 2, "Rage");
   assert(n7 === "1d12{Hope}+1d12{Fear}+1d6+1d6+1d6 # Rage", "duality notation with adv + 2 exp + label");
+}
+
+// --- Power notation builder ---
+{
+  assert(buildPowerNotation(0) === "2d10", "basic power notation");
+  assert(buildPowerNotation(3) === "2d10+3", "power notation with +3");
+  assert(buildPowerNotation(-1) === "2d10-1", "power notation with -1");
+}
+
+// --- Single Hope/Fear notation builder ---
+{
+  assert(buildSingleDualityDieNotation("hope", 0) === "1d12{Hope}", "basic hope notation");
+  assert(buildSingleDualityDieNotation("hope", 2, "Clutch") === "1d12{Hope}+2 # Clutch", "hope notation with modifier and label");
+  assert(buildSingleDualityDieNotation("fear", -1) === "1d12{Fear}-1", "fear notation with -1");
 }
 
 // --- Summary ---

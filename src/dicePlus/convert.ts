@@ -76,3 +76,23 @@ export function buildDualityNotation(
   if (label) notation += ` # ${label}`;
   return notation;
 }
+
+export function buildPowerNotation(modifier: number): string {
+  let notation = "2d10";
+  if (modifier > 0) notation += `+${modifier}`;
+  if (modifier < 0) notation += `${modifier}`;
+  return notation;
+}
+
+export function buildSingleDualityDieNotation(
+  die: "hope" | "fear",
+  modifier: number,
+  label?: string,
+): string {
+  const dieName = die === "hope" ? "Hope" : "Fear";
+  let notation = `1d12{${dieName}}`;
+  if (modifier > 0) notation += `+${modifier}`;
+  if (modifier < 0) notation += `${modifier}`;
+  if (label) notation += ` # ${label}`;
+  return notation;
+}
