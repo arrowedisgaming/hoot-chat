@@ -5,16 +5,13 @@ Plain TypeScript test files that run with `tsx`. No test framework required.
 ## Running
 
 ```bash
-npx tsx test/parseDualityRoll.test.ts
-npx tsx test/aliases.test.ts
-npx tsx test/dicePlusConvert.test.ts
-npx tsx test/systemMessages.test.ts
+npm test
 ```
 
-Or run all:
+Or run a single file:
 
 ```bash
-for f in test/*.test.ts; do npx tsx "$f"; done
+npx tsx test/parseDualityRoll.test.ts
 ```
 
 ## Design

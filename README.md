@@ -11,7 +11,7 @@ Player colors. Dice rolls. Notifications. All the basics!
 1. In Owlbear Rodeo, open the **Extensions** menu and select **Add Extension**.
 2. Enter the manifest URL:
    ```
-   https://hoot-chat.pages.dev/manifest.json
+   https://arrowedisgaming.github.io/hoot-chat/manifest.json
    ```
 3. The **Hoot Chat** button will appear in the toolbar.
 
@@ -89,12 +89,18 @@ npm run build
 
 Deploy the contents of `dist/` anywhere that can serve static files over HTTPS.
 
+To build the fork for GitHub Pages:
+
+```bash
+npm run build:pages
+```
+
+GitHub Actions deploys this branch to `https://arrowedisgaming.github.io/hoot-chat/`.
+
 ## Tests
 
 ```bash
-npx tsx test/parseDualityRoll.test.ts
-npx tsx test/aliases.test.ts
-npx tsx test/dicePlusConvert.test.ts
+npm test
 ```
 
 See `test/README.md` for details.
