@@ -392,6 +392,50 @@ function SystemMessageDisplay({ msg }: { msg: SystemMessage }) {
   );
 }
 
+function buildDicePlusDualityData(
+  dice: RollDie[],
+  template: DualityData,
+  singleDualityDie?: "hope" | "fear",
+): DualityData {
+  if (singleDualityDie === "hope") {
+    return {
+      ...template,
+      hopeDie: dice[0]?.value ?? 0,
+      fearDie: 0,
+    };
+  }
+
+  if (singleDualityDie === "fear") {
+    return {
+      ...template,
+      hopeDie: 0,
+      fearDie: dice[0]?.value ?? 0,
+    };
+  }
+
+  const hopeDie = dice[0]?.value ?? 0;
+  const fearDie = dice[1]?.value ?? 0;
+  const advDie = template.advDie !== undefined ? Math.abs(dice[2]?.value ?? 0) : undefined;
+  const disDie = template.disDie !== undefined ? Math.abs(dice[2]?.value ?? 0) : undefined;
+  const expStart = 2 + (advDie !== undefined || disDie !== undefined ? 1 : 0);
+  const expDice = template.expDice
+    ? dice.slice(expStart, expStart + template.expDice.length).map((d) => Math.abs(d.value))
+    : undefined;
+  const outcome = hopeDie === fearDie ? "crit" as const
+    : hopeDie > fearDie ? "hope" as const
+    : "fear" as const;
+
+  return {
+    hopeDie,
+    fearDie,
+    ...(advDie !== undefined && { advDie }),
+    ...(disDie !== undefined && { disDie }),
+    ...(expDice && expDice.length > 0 && { expDice }),
+    outcome,
+    ...(template.label && { label: template.label }),
+  };
+}
+
 // --- component ---
 
 export default function App() {
@@ -569,13 +613,16 @@ export default function App() {
             ? (rawRoll.specialRollData?.bonus ?? 0)
             : rawRoll.bonus;
           const hasSkill = rawRoll.specialRollData?.hasSkill ?? false;
-          sendRoll(dice, bonus, netEdges, hasSkill).catch(console.error);
+          sendRoll(dice, bonus, { netEdges, hasSkill }).catch(console.error);
         })
       );
 
       // Dice+ integration: check availability and load preference.
-      // Register listeners unconditionally — they're no-ops when no
-      // pending rolls exist, and must be ready if Dice+ is enabled later.
+      // Register listeners unconditionally — they're no-ops when no pending
+      // rolls exist, and must be ready if Dice+ is enabled later. Dice+ returns
+      // results on the `com.hootchat/roll-result` broadcast channel (NOT the
+      // official `rodeo.owlbear.dice` metadata), so this listener is the only
+      // path that turns a Dice+ roll into a chat message.
       unsubs.push(registerDicePlusListeners());
       dicePlusAvailableRef.current = await isDicePlusAvailable();
       useDicePlusRef.current = await getDicePlusEnabled();
@@ -743,7 +790,7 @@ export default function App() {
         try {
           const result = await sendDicePlusRoll(rollId, notation, playerId, playerName);
           const bonus = result.total - result.dice.reduce((s, d) => s + d.value, 0);
-          sendRoll(result.dice, bonus).catch(console.error);
+          sendRoll(result.dice, bonus, { source: "dicePlus" }).catch(console.error);
         } catch (err) {
           pushSystemMessage("error", { type: "text", text: `Dice+ error: ${err}` });
         }
@@ -770,13 +817,20 @@ export default function App() {
             playerName,
             { netEdges: result.netEdges, hasSkill: result.hasSkill },
           );
-          sendRoll(dicePlusResult.dice, result.bonus, result.netEdges, result.hasSkill).catch(console.error);
+          sendRoll(dicePlusResult.dice, result.bonus, {
+            netEdges: result.netEdges,
+            hasSkill: result.hasSkill,
+            source: "dicePlus",
+          }).catch(console.error);
         } catch (err) {
           pushSystemMessage("error", { type: "text", text: `Dice+ error: ${err}` });
         }
         return;
       }
-      sendRoll(result.dice, result.bonus, result.netEdges, result.hasSkill).catch(console.error);
+      sendRoll(result.dice, result.bonus, {
+        netEdges: result.netEdges,
+        hasSkill: result.hasSkill,
+      }).catch(console.error);
       return;
     }
 
@@ -798,29 +852,14 @@ export default function App() {
         const playerId = playerIdRef.current;
         const playerName = await OBR.player.getName();
         try {
-          const result = await sendDicePlusRoll(rollId, notation, playerId, playerName, {
+          const dicePlusResult = await sendDicePlusRoll(rollId, notation, playerId, playerName, {
             dualityData: dd,
           });
-          // Reconstruct dualityData from Dice+ result dice
-          const dice = result.dice;
-          const hopeDie = dice[0]?.value ?? 0;
-          const fearDie = dice[1]?.value ?? 0;
-          const advDie = dd.advDie !== undefined ? (dice[2]?.value ?? 0) : undefined;
-          const disDie = dd.disDie !== undefined ? (dice[2]?.value ?? 0) : undefined;
-          const expStart = 2 + (advDie !== undefined || disDie !== undefined ? 1 : 0);
-          const expDice = dd.expDice ? dice.slice(expStart, expStart + dd.expDice.length).map(d => d.value) : undefined;
-          const outcome = hopeDie === fearDie ? "crit" as const
-            : hopeDie > fearDie ? "hope" as const
-            : "fear" as const;
-          const dualityData = {
-            hopeDie, fearDie,
-            ...(advDie !== undefined && { advDie }),
-            ...(disDie !== undefined && { disDie }),
-            ...(expDice && expDice.length > 0 && { expDice }),
-            outcome,
-            ...(dd.label && { label: dd.label }),
-          };
-          sendRoll(result.dice, parsed.bonus, undefined, undefined, dualityData).catch(console.error);
+          const dualityData = buildDicePlusDualityData(dicePlusResult.dice, dd);
+          sendRoll(dicePlusResult.dice, parsed.bonus, {
+            dualityData,
+            source: "dicePlus",
+          }).catch(console.error);
         } catch (err) {
           pushSystemMessage("error", { type: "text", text: `Dice+ error: ${err}` });
         }
@@ -828,7 +867,7 @@ export default function App() {
       }
       const result = parseDualityRoll(args);
       if (!result) return;
-      sendRoll(result.dice, result.bonus, undefined, undefined, result.dualityData).catch(console.error);
+      sendRoll(result.dice, result.bonus, { dualityData: result.dualityData }).catch(console.error);
       return;
     }
 
@@ -847,18 +886,17 @@ export default function App() {
             playerName,
             { dualityData: result.dualityData },
           );
-          const hopeDie = dicePlusResult.dice[0]?.value ?? 0;
-          sendRoll(dicePlusResult.dice, result.bonus, undefined, undefined, {
-            ...result.dualityData,
-            hopeDie,
-            fearDie: 0,
+          const dualityData = buildDicePlusDualityData(dicePlusResult.dice, result.dualityData, "hope");
+          sendRoll(dicePlusResult.dice, result.bonus, {
+            dualityData,
+            source: "dicePlus",
           }).catch(console.error);
         } catch (err) {
           pushSystemMessage("error", { type: "text", text: `Dice+ error: ${err}` });
         }
         return;
       }
-      sendRoll(result.dice, result.bonus, undefined, undefined, result.dualityData).catch(console.error);
+      sendRoll(result.dice, result.bonus, { dualityData: result.dualityData }).catch(console.error);
       return;
     }
 
@@ -877,18 +915,17 @@ export default function App() {
             playerName,
             { dualityData: result.dualityData },
           );
-          const fearDie = dicePlusResult.dice[0]?.value ?? 0;
-          sendRoll(dicePlusResult.dice, result.bonus, undefined, undefined, {
-            ...result.dualityData,
-            hopeDie: 0,
-            fearDie,
+          const dualityData = buildDicePlusDualityData(dicePlusResult.dice, result.dualityData, "fear");
+          sendRoll(dicePlusResult.dice, result.bonus, {
+            dualityData,
+            source: "dicePlus",
           }).catch(console.error);
         } catch (err) {
           pushSystemMessage("error", { type: "text", text: `Dice+ error: ${err}` });
         }
         return;
       }
-      sendRoll(result.dice, result.bonus, undefined, undefined, result.dualityData).catch(console.error);
+      sendRoll(result.dice, result.bonus, { dualityData: result.dualityData }).catch(console.error);
       return;
     }
 
@@ -917,7 +954,16 @@ export default function App() {
     OBR.broadcast.sendMessage(MSG_BROADCAST_CHANNEL, msg).catch(console.error);
   }
 
-  async function sendRoll(dice: RollDie[], bonus: number, netEdges?: number, hasSkill?: boolean, dualityData?: DualityData) {
+  async function sendRoll(
+    dice: RollDie[],
+    bonus: number,
+    options: {
+      netEdges?: number;
+      hasSkill?: boolean;
+      dualityData?: DualityData;
+      source?: "dicePlus";
+    } = {},
+  ) {
     const msg: ChatMessage = {
       id: newId(),
       playerId: playerIdRef.current,
@@ -926,9 +972,10 @@ export default function App() {
       type: "roll",
       dice,
       bonus,
-      ...(netEdges !== undefined && { netEdges }),
-      ...(hasSkill && { hasSkill }),
-      ...(dualityData && { dualityData }),
+      ...(options.netEdges !== undefined && { netEdges: options.netEdges }),
+      ...(options.hasSkill && { hasSkill: options.hasSkill }),
+      ...(options.dualityData && { dualityData: options.dualityData }),
+      ...(options.source && { source: options.source }),
       timestamp: Date.now(),
     };
 

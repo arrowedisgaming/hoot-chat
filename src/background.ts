@@ -1,5 +1,6 @@
 import OBR from "@owlbear-rodeo/sdk";
 import { ChatMessage } from "./types";
+import { shouldNotify, buildNotificationUrl } from "./notify";
 
 const CHAT_STATUS_CHANNEL = "com.hootchat/chat-status";
 const STATUS_REQUEST_CHANNEL = "com.hootchat/status-request";
@@ -10,6 +11,7 @@ const NOTIF_DISMISS_CHANNEL = "com.hootchat/notif-dismiss";
 const MSG_BROADCAST_CHANNEL = "com.hootchat/message";
 const HISTORY_KEY = "com.hootchat/history";
 const EXPIRE_MS = 6_000;
+const NOTIFICATION_URL = buildNotificationUrl(window.location.origin, import.meta.env.BASE_URL);
 
 function msgKey(m: ChatMessage): string {
   return m.id;
@@ -52,7 +54,7 @@ OBR.onReady(async () => {
     popoverState = "OPENING";
     OBR.popover.open({
       id: NOTIF_ID,
-      url: "/notification.html",
+      url: NOTIFICATION_URL,
       width: 320,
       height: 1,
       anchorReference: "POSITION",
@@ -90,7 +92,7 @@ OBR.onReady(async () => {
     const msg = event.data as ChatMessage;
     if (!msg || seen.has(msgKey(msg))) return;
     seen.add(msgKey(msg));
-    if (msg.playerId === myId || chatIsOpen) return;
+    if (!shouldNotify(msg, myId, chatIsOpen)) return;
 
     const id = msgKey(msg);
     const timer = setTimeout(() => removeNotif(id), EXPIRE_MS);

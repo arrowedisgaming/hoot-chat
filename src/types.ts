@@ -33,6 +33,7 @@ export interface RollMessage extends ChatMessageBase {
   netEdges?: number; // present on power rolls
   hasSkill?: boolean; // present on power rolls when applicable skill used
   dualityData?: DualityData; // present on duality rolls
+  source?: "dicePlus"; // present when the roll was produced by Dice+
 }
 
 export type ChatMessage = TextMessage | RollMessage;
